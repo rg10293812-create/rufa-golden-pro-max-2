@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="page-title">مرحباً بك، {{ current_user.username }}</h1>
+    <div class="page-sub">لوحة التحكم الرئيسية لإدارة السعي والعقارات والمهام</div>
+  </div>
+  <div class="cardx px-4 py-3 text-center d-none d-md-block">
+    <div class="fw-bold">اليوم</div><div class="text-muted small">{{ recent_props[0].created_at.strftime('%Y/%m/%d') if recent_props else 'RUFA GOLD ERP' }}</div>
+  </div>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-md-6 col-xl-3"><div class="cardx stat-card"><div><div class="stat-label">إجمالي السعي</div><div class="stat-value text-primary">{{ (company_income or 0)|money }}</div><div class="stat-note">نصيب الشركة من الصفقات</div></div><div class="circle c-blue"><i class="bi bi-coins"></i></div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="cardx stat-card"><div><div class="stat-label">إجمالي الرواتب</div><div class="stat-value" style="color:#d39a08">{{ (salaries or 0)|money }}</div><div class="stat-note">الرواتب المصروفة</div></div><div class="circle c-gold"><i class="bi bi-people"></i></div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="cardx stat-card"><div><div class="stat-label">المصاريف الشهرية</div><div class="stat-value text-danger">{{ (expenses or 0)|money }}</div><div class="stat-note">مصروفات الشركة</div></div><div class="circle c-red"><i class="bi bi-wallet2"></i></div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="cardx stat-card"><div><div class="stat-label">صافي الربح</div><div class="stat-value text-success">{{ (net or 0)|money }}</div><div class="stat-note">بعد الرواتب والمصاريف</div></div><div class="circle c-green"><i class="bi bi-graph-up-arrow"></i></div></div></div>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-xl-6"><div class="cardx p-4 h-100"><div class="d-flex justify-content-between align-items-center mb-3"><h3 class="section-title">إحصائية السعي</h3><button class="btn-soft btn-sm">هذا الشهر</button></div><div class="chart-fake"><svg viewBox="0 0 600 260" preserveAspectRatio="none"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4ca64" stop-opacity=".45"/><stop offset="1" stop-color="#f4ca64" stop-opacity=".04"/></linearGradient></defs><g stroke="#e8edf5" stroke-width="1"><line x1="0" y1="50" x2="600" y2="50"/><line x1="0" y1="100" x2="600" y2="100"/><line x1="0" y1="150" x2="600" y2="150"/><line x1="0" y1="200" x2="600" y2="200"/></g><path d="M0,210 L50,150 L100,180 L150,120 L210,155 L260,80 L320,68 L380,142 L430,188 L485,170 L540,125 L600,150 L600,260 L0,260 Z" fill="url(#g)"/><path d="M0,210 L50,150 L100,180 L150,120 L210,155 L260,80 L320,68 L380,142 L430,188 L485,170 L540,125 L600,150" fill="none" stroke="#f0ad00" stroke-width="4" stroke-linecap="round"/></svg></div></div></div>
+  <div class="col-xl-6"><div class="cardx p-4 h-100"><div class="d-flex justify-content-between align-items-center mb-3"><h3 class="section-title">آخر العقارات المضافة</h3><a href="{{ url_for('properties') }}" class="small-link">عرض الكل</a></div><div class="table-responsive"><table class="table"><thead><tr><th>العقار</th><th>المشروع</th><th>الحي</th><th>الحالة</th></tr></thead><tbody>{% for p in recent_props %}<tr><td class="fw-bold">{{ p.code }}</td><td>{{ p.project_name }}</td><td>{{ p.district }}</td><td><span class="badge-status st-{{ p.status }}">{{ p.status|status_label }}</span></td></tr>{% else %}<tr><td colspan="4" class="empty">لا توجد عقارات بعد</td></tr>{% endfor %}</tbody></table></div></div></div>
+</div>
+<div class="row g-3">
+  <div class="col-md-4"><div class="cardx stat-card"><div><div class="stat-label">إجمالي العقارات</div><div class="stat-value">{{ props_count }}</div></div><div class="circle c-blue"><i class="bi bi-building"></i></div></div></div>
+  <div class="col-md-4"><div class="cardx stat-card"><div><div class="stat-label">العقارات المباعة</div><div class="stat-value">{{ sold_count }}</div></div><div class="circle c-green"><i class="bi bi-check2-circle"></i></div></div></div>
+  <div class="col-md-4"><div class="cardx stat-card"><div><div class="stat-label">المهام المفتوحة</div><div class="stat-value">{{ open_tasks }}</div></div><div class="circle c-gold"><i class="bi bi-clipboard-check"></i></div></div></div>
+</div>
+{% endblock %}
