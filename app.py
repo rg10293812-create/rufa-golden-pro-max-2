@@ -293,7 +293,7 @@ def dashboard():
 <div class="page-title"><div><h1>مرحباً بك، {{ user.name }}</h1><div class="small">لوحة التحكم الرئيسية</div></div></div>
 <div class="grid cards">
 <div class="card stat"><div><div class="stat-label">إجمالي السعي</div><div class="stat-value">{{ total_commission|money }}</div></div><div class="stat-icon blue">💰</div></div>
-<div class="card stat"><div><div class="stat-label">المحفوظ للشركة</div><div class="stat-value">{{ total_company|money }}</div></div><div class="stat-icon yellow">🏢</div></div>
+<div class="card stat"><div><div class="stat-label">رصيد الشركة</div><div class="stat-value">{{ total_company|money }}</div></div><div class="stat-icon yellow">🏢</div></div>
 <div class="card stat"><div><div class="stat-label">المبالغ المصروفة والمشاركات</div><div class="stat-value">{{ (total_expenses + total_salaries + total_shares)|money }}</div></div><div class="stat-icon red">💳</div></div>
 <div class="card stat"><div><div class="stat-label">المتبقي من السعي</div><div class="stat-value">{{ net_profit|money }}</div></div><div class="stat-icon green">↗</div></div>
 </div>
@@ -468,69 +468,95 @@ def tasks():
     return page(render_template_string(html, user=user, staff=staff, rows=rows, users_map=users_map))
 
 
+
 @app.route("/finance", methods=["GET", "POST"])
 @login_required
 @admin_required
 def finance():
     if request.method == "POST":
         action = request.form.get("action", "allocation")
-        total_commission_now = dec(db.session.query(db.func.coalesce(db.func.sum(Deal.commission_amount), 0)).scalar())
-        total_allocations_now = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).scalar())
-        total_shares_now = dec(db.session.query(db.func.coalesce(db.func.sum(DealShare.amount), 0)).scalar())
-        available_now = total_commission_now - total_allocations_now - total_shares_now
 
         if action == "share":
             deal_id = int(request.form.get("deal_id") or 0)
             deal = db.session.get(Deal, deal_id)
-            user_ids = request.form.getlist("user_id")
-            amounts = request.form.getlist("amount")
             if not deal:
                 flash("اختر الصفقة بشكل صحيح", "danger")
                 return redirect(url_for("finance"))
 
+            company_percent = dec(request.form.get("company_percent"))
+            user_ids = request.form.getlist("user_id")
+            percents = request.form.getlist("percent")
+
             prepared = []
-            total_new_shares = Decimal("0")
             used_users = set()
-            for uid_raw, amount_raw in zip(user_ids, amounts):
-                if not uid_raw or not amount_raw:
+            total_people_percent = Decimal("0")
+            for uid_raw, percent_raw in zip(user_ids, percents):
+                if not uid_raw or not percent_raw:
                     continue
                 participant = db.session.get(User, int(uid_raw))
-                amount = dec(amount_raw)
-                if not participant or amount <= 0:
+                percent = dec(percent_raw)
+                if not participant or percent <= 0:
                     continue
                 if participant.id in used_users:
                     flash("لا تكرر نفس الموظف في نفس عملية المشاركة", "danger")
                     return redirect(url_for("finance"))
                 used_users.add(participant.id)
-                prepared.append((participant, amount))
-                total_new_shares += amount
+                total_people_percent += percent
+                amount = (dec(deal.commission_amount) * percent / Decimal("100")).quantize(Decimal("0.01"))
+                prepared.append((participant, percent, amount))
 
-            if not prepared:
-                flash("أضف موظفاً واحداً على الأقل مع مبلغ صحيح", "danger")
-                return redirect(url_for("finance"))
-            if total_new_shares > available_now:
-                flash("مجموع مشاركات السعي أكبر من المتبقي من إجمالي السعي", "danger")
+            if company_percent < 0:
+                flash("نسبة الشركة غير صحيحة", "danger")
                 return redirect(url_for("finance"))
 
-            for participant, amount in prepared:
-                db.session.add(DealShare(deal_id=deal.id, user_id=participant.id, amount=amount, percent=0))
+            total_percent = company_percent + total_people_percent
+            if total_percent > 100:
+                flash("مجموع نسب الشركة والموظفين أكبر من 100%", "danger")
+                return redirect(url_for("finance"))
+
+            # استبدال توزيع هذه الصفقة بالتوزيع الجديد حتى لا تتكرر الحسابات
+            DealShare.query.filter_by(deal_id=deal.id).delete()
+            FinanceEntry.query.filter_by(deal_id=deal.id, category="company").delete()
+
+            company_amount = (dec(deal.commission_amount) * company_percent / Decimal("100")).quantize(Decimal("0.01"))
+            deal.company_amount = company_amount
+            if company_amount > 0:
+                prop = db.session.get(Property, deal.property_id)
+                db.session.add(FinanceEntry(
+                    title=f"نصيب الشركة من صفقة {prop.project_name if prop else deal.id}",
+                    category="company",
+                    entry_type="company_share",
+                    amount=company_amount,
+                    deal_id=deal.id,
+                    notes=f"نسبة الشركة {company_percent}%"
+                ))
+
+            for participant, percent, amount in prepared:
+                db.session.add(DealShare(deal_id=deal.id, user_id=participant.id, percent=percent, amount=amount))
+
             db.session.commit()
-            flash("تم حفظ مشاركات السعي للموظفين", "success")
+            flash("تم حفظ توزيع السعي بالنسبة المئوية", "success")
             return redirect(url_for("finance"))
 
-        title = request.form.get("title") or "بند مالي"
+        title = request.form.get("title") or "مصروف"
         category = request.form.get("category", "other")
         amount = dec(request.form.get("amount"))
         notes = request.form.get("notes", "")
         if amount <= 0:
             flash("اكتب المبلغ بشكل صحيح", "danger")
             return redirect(url_for("finance"))
-        if amount > available_now:
-            flash("المبلغ أكبر من المتبقي من إجمالي السعي", "danger")
+
+        company_total_now = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category == "company").scalar())
+        expenses_now = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category != "company").scalar())
+        company_balance_now = company_total_now - expenses_now
+        if amount > company_balance_now:
+            flash("المصروف أكبر من رصيد الشركة الحالي", "danger")
             return redirect(url_for("finance"))
-        db.session.add(FinanceEntry(title=title, category=category, entry_type="allocation", amount=amount, notes=notes))
+
+        db.session.add(FinanceEntry(title=title, category=category, entry_type="expense", amount=amount, notes=notes))
         db.session.commit()
-        flash("تم حفظ المبلغ من إجمالي السعي", "success")
+        flash("تم حفظ المصروف وخصمه من رصيد الشركة", "success")
+        return redirect(url_for("finance"))
 
     deals = Deal.query.order_by(Deal.id.desc()).all()
     entries = FinanceEntry.query.order_by(FinanceEntry.id.desc()).limit(50).all()
@@ -540,58 +566,68 @@ def finance():
     props_map = {p.id: p for p in Property.query.all()}
 
     total_commission = dec(db.session.query(db.func.coalesce(db.func.sum(Deal.commission_amount), 0)).scalar())
-    total_allocations = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).scalar())
+    total_company = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category == "company").scalar())
+    total_expenses = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category != "company").scalar())
     total_shares = dec(db.session.query(db.func.coalesce(db.func.sum(DealShare.amount), 0)).scalar())
-    available = total_commission - total_allocations - total_shares
+    company_balance = total_company - total_expenses
+    undistributed = total_commission - total_company - total_shares
 
     totals_by_category = {}
     for key in ["company", "ads", "salary", "photo", "office", "other"]:
-        totals_by_category[key] = dec(db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category == key).scalar())
+        q = db.session.query(db.func.coalesce(db.func.sum(FinanceEntry.amount), 0)).filter(FinanceEntry.category == key)
+        totals_by_category[key] = dec(q.scalar())
     totals_by_category["shares"] = total_shares
 
     html = """
 <div class="page-title"><h1>نظام السعي والحسابات</h1></div>
 <div class="grid cards">
 <div class="card"><div class="stat-label">إجمالي السعي الداخل</div><div class="stat-value">{{ total_commission|money }}</div></div>
-<div class="card"><div class="stat-label">مشاركات السعي للموظفين</div><div class="stat-value">{{ total_shares|money }}</div></div>
-<div class="card"><div class="stat-label">مصروفات ورواتب</div><div class="stat-value">{{ total_allocations|money }}</div></div>
-<div class="card"><div class="stat-label">المتبقي من السعي</div><div class="stat-value">{{ available|money }}</div></div>
+<div class="card"><div class="stat-label">رصيد الشركة</div><div class="stat-value">{{ company_balance|money }}</div></div>
+<div class="card"><div class="stat-label">مشاركات الموظفين</div><div class="stat-value">{{ total_shares|money }}</div></div>
+<div class="card"><div class="stat-label">غير موزع من السعي</div><div class="stat-value">{{ undistributed|money }}</div></div>
 </div><br>
 <div class="grid two">
-<div class="card"><h3>زر مشاركة سعي</h3>
-<p class="small">اختر الصفقة ثم أضف أكثر من موظف أو ميداني مشارك، واكتب مبلغ كل شخص بنفسك من إجمالي السعي. لا يوجد تقسيم تلقائي.</p>
-<form method="post" class="form-grid">
+<div class="card"><h3>مشاركة السعي بالنسبة المئوية</h3>
+<p class="small">اختر الصفقة، حدد نسبة الشركة، ثم اضغط + إضافة موظف مشارك حسب العدد المطلوب. النظام يحسب المبالغ تلقائياً من إجمالي السعي.</p>
+<form method="post" class="form-grid" id="shareForm">
 <input type="hidden" name="action" value="share">
-<div class="full"><label>الصفقة</label><select class="form-select" name="deal_id" required>{% for d in deals %}<option value="{{ d.id }}">#{{ d.id }} - {{ props_map.get(d.property_id).project_name if props_map.get(d.property_id) else 'عقار' }} - {{ d.commission_amount|money }}</option>{% endfor %}</select></div>
-{% for i in range(1,6) %}
-<div><label>الموظف أو الميداني {{ i }}</label><select class="form-select" name="user_id"><option value="">بدون</option>{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select></div>
-<div><label>مبلغ المشاركة {{ i }}</label><input class="form-control" name="amount" placeholder="مثال: 5000"></div>
-{% endfor %}
-<button class="btn btn-gold full">حفظ مشاركات السعي</button></form></div>
-<div class="card"><h3>إضافة صرف من إجمالي السعي</h3>
-<p class="small">هنا تضيف رواتب الموظفين أو الإعلانات أو التصوير أو أي مصروف، وكلها تخصم من المتبقي من إجمالي السعي.</p>
+<div class="full"><label>الصفقة</label><select class="form-select" name="deal_id" id="dealSelect" required>{% for d in deals %}<option value="{{ d.id }}" data-commission="{{ d.commission_amount }}">#{{ d.id }} - {{ props_map.get(d.property_id).project_name if props_map.get(d.property_id) else 'عقار' }} - {{ d.commission_amount|money }}</option>{% endfor %}</select></div>
+<div><label>نسبة الشركة %</label><input class="form-control" name="company_percent" id="companyPercent" placeholder="مثال: 40" required></div>
+<div><label>مبلغ الشركة</label><input class="form-control" id="companyAmount" readonly placeholder="يحسب تلقائياً"></div>
+<div class="full"><button type="button" class="btn btn-dark" onclick="addParticipant()">+ إضافة موظف مشارك</button></div>
+<div class="full" id="participantsBox"></div>
+<div class="full dark-note" id="shareSummary">اختر الصفقة واكتب النسب لعرض الملخص.</div>
+<button class="btn btn-gold full">حفظ توزيع السعي</button></form></div>
+<div class="card"><h3>إضافة مصروف من رصيد الشركة</h3>
+<p class="small">المصروفات تخصم من رصيد الشركة فقط، مثل رواتب الموظفين والإعلانات والتصوير.</p>
 <form method="post" class="form-grid">
 <input type="hidden" name="action" value="allocation">
-<div><label>البند</label><select class="form-select" name="category"><option value="salary">رواتب الموظفين</option><option value="ads">إعلانات</option><option value="photo">تصوير</option><option value="office">تشغيل</option><option value="company">محفوظ للشركة</option><option value="other">أخرى</option></select></div>
+<div><label>نوع المصروف</label><select class="form-select" name="category"><option value="salary">رواتب الموظفين</option><option value="ads">إعلانات</option><option value="photo">تصوير</option><option value="office">تشغيل</option><option value="other">أخرى</option></select></div>
 <div><label>المبلغ</label><input class="form-control" name="amount" placeholder="مثال: 3000" required></div>
-<div class="full"><label>اسم العملية</label><input class="form-control" name="title" placeholder="مثال: راتب أحمد / إعلانات سناب / نصيب الشركة" required></div>
+<div class="full"><label>اسم العملية</label><input class="form-control" name="title" placeholder="مثال: راتب أحمد / إعلانات سناب" required></div>
 <div class="full"><label>ملاحظة</label><textarea class="form-control" name="notes" placeholder="اختياري"></textarea></div>
-<button class="btn btn-gold full">حفظ الصرف</button></form></div>
+<button class="btn btn-gold full">حفظ المصروف</button></form></div>
 </div><br>
 <div class="grid two">
-<div class="card"><h3>ملخص الإدارة المالية</h3><table><tr><th>البند</th><th>الإجمالي</th></tr>{% for key, val in totals.items() %}<tr><td>{{ category_name(key) }}</td><td>{{ val|money }}</td></tr>{% endfor %}</table></div>
-<div class="card"><h3>مشاركات السعي</h3><table><tr><th>الموظف</th><th>الصفقة</th><th>المبلغ</th><th>التاريخ</th></tr>{% for s in shares %}<tr><td>{{ users_map.get(s.user_id).name if users_map.get(s.user_id) else '-' }}</td><td>#{{ s.deal_id }}</td><td>{{ s.amount|money }}</td><td>-</td></tr>{% endfor %}</table></div>
+<div class="card"><h3>ملخص الإدارة المالية</h3><table><tr><th>البند</th><th>الإجمالي</th></tr>{% for key, val in totals.items() %}<tr><td>{{ category_name(key) }}</td><td>{{ val|money }}</td></tr>{% endfor %}<tr><td><b>رصيد الشركة الحالي</b></td><td><b>{{ company_balance|money }}</b></td></tr></table></div>
+<div class="card"><h3>مشاركات السعي</h3><table><tr><th>الموظف</th><th>الصفقة</th><th>النسبة</th><th>المبلغ</th></tr>{% for s in shares %}<tr><td>{{ users_map.get(s.user_id).name if users_map.get(s.user_id) else '-' }}</td><td>#{{ s.deal_id }}</td><td>{{ s.percent }}%</td><td>{{ s.amount|money }}</td></tr>{% endfor %}</table></div>
 </div><br>
 <div class="grid two">
-<div class="card"><h3>آخر الصروفات والرواتب</h3><table><tr><th>البند</th><th>الاسم</th><th>المبلغ</th><th>التاريخ</th></tr>{% for e in entries %}<tr><td>{{ category_name(e.category) }}</td><td>{{ e.title }}</td><td>{{ e.amount|money }}</td><td>{{ e.created_at.strftime('%Y-%m-%d') if e.created_at else '-' }}</td></tr>{% endfor %}</table></div>
-<div class="card"><h3>الصفقات المباعة</h3><table><tr><th>رقم الصفقة</th><th>إجمالي السعي</th><th>التاريخ</th></tr>{% for d in deals %}<tr><td>#{{ d.id }}</td><td>{{ d.commission_amount|money }}</td><td>{{ d.sold_at }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h3>آخر العمليات المالية</h3><table><tr><th>البند</th><th>الاسم</th><th>المبلغ</th><th>التاريخ</th></tr>{% for e in entries %}<tr><td>{{ category_name(e.category) }}</td><td>{{ e.title }}</td><td>{{ e.amount|money }}</td><td>{{ e.created_at.strftime('%Y-%m-%d') if e.created_at else '-' }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h3>الصفقات المباعة</h3><table><tr><th>رقم الصفقة</th><th>إجمالي السعي</th><th>نصيب الشركة</th><th>التاريخ</th></tr>{% for d in deals %}<tr><td>#{{ d.id }}</td><td>{{ d.commission_amount|money }}</td><td>{{ d.company_amount|money }}</td><td>{{ d.sold_at }}</td></tr>{% endfor %}</table></div>
 </div>
+<script>
+function currentCommission(){const s=document.getElementById('dealSelect'); if(!s||!s.selectedOptions.length) return 0; return parseFloat(s.selectedOptions[0].dataset.commission||0);}
+function rowTemplate(){return `<div class="form-grid participant-row" style="border:1px solid #e5e7eb;border-radius:14px;padding:12px;margin:10px 0;background:#fafafa"><div><label>الموظف أو الميداني</label><select class="form-select participant-user" name="user_id"><option value="">اختر</option>{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select></div><div><label>النسبة %</label><input class="form-control participant-percent" name="percent" placeholder="مثال: 10" oninput="updateSummary()"></div><div class="full"><button type="button" class="btn btn-red" onclick="this.closest('.participant-row').remove();updateSummary();">حذف المشارك</button></div></div>`;}
+function addParticipant(){document.getElementById('participantsBox').insertAdjacentHTML('beforeend', rowTemplate());updateSummary();}
+function updateSummary(){const total=currentCommission();const cp=parseFloat(document.getElementById('companyPercent').value||0);let people=0;document.querySelectorAll('.participant-percent').forEach(i=>{people+=parseFloat(i.value||0)});const companyAmount=total*cp/100;document.getElementById('companyAmount').value=isFinite(companyAmount)?companyAmount.toFixed(2):'';const remaining=100-cp-people;const peopleAmount=total*people/100;const remainingAmount=total*remaining/100;document.getElementById('shareSummary').innerHTML=`إجمالي السعي: ${total.toLocaleString()} ر.س<br>نسبة الشركة: ${cp}% = ${companyAmount.toLocaleString()} ر.س<br>مجموع نسب المشاركين: ${people}% = ${peopleAmount.toLocaleString()} ر.س<br>المتبقي غير موزع: ${remaining}% = ${remainingAmount.toLocaleString()} ر.س`;}
+document.addEventListener('input', e=>{if(e.target.id==='companyPercent') updateSummary();});document.addEventListener('change', e=>{if(e.target.id==='dealSelect') updateSummary();});
+</script>
 """
-    return page(render_template_string(html, deals=deals, entries=entries, shares=shares, staff=staff, users_map=users_map, props_map=props_map, total_commission=total_commission, total_allocations=total_allocations, total_shares=total_shares, available=available, totals=totals_by_category, category_name=category_name))
-
+    return page(render_template_string(html, deals=deals, entries=entries, shares=shares, staff=staff, users_map=users_map, props_map=props_map, total_commission=total_commission, total_company=total_company, total_expenses=total_expenses, total_shares=total_shares, company_balance=company_balance, undistributed=undistributed, totals=totals_by_category, category_name=category_name))
 
 def category_name(category):
-    return {"ads":"إعلانات", "salary":"رواتب الموظفين", "photo":"تصوير", "office":"تشغيل", "company":"محفوظ للشركة", "shares":"مشاركة سعي", "other":"أخرى"}.get(category, category)
+    return {"ads":"إعلانات", "salary":"رواتب الموظفين", "photo":"تصوير", "office":"تشغيل", "company":"رصيد الشركة", "shares":"مشاركة سعي", "other":"أخرى"}.get(category, category)
 
 
 if __name__ == "__main__":
