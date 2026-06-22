@@ -247,8 +247,7 @@ def login():
         flash("بيانات الدخول غير صحيحة", "danger")
     html = """
 <body class="auth-body"><div class="login-card"><div class="brand">RUFA GOLD ERP</div><p class="small">نظام إدارة شركة تسويق عقاري</p>
-<form method="post"><label>اسم المستخدم</label><input class="form-control" name="username" value="ROFA" required><br><label>كلمة المرور</label><input class="form-control" type="password" name="password" required><br><button class="btn btn-gold" style="width:100%">دخول</button></form>
-<p class="small">المدير الافتراضي: ROFA / 1122334400</p></div></body>
+<form method="post"><label>اسم الموظف</label><input class="form-control" name="username" value="ROFA" required><br><label>كلمة المرور</label><input class="form-control" type="password" name="password" required><br><button class="btn btn-gold" style="width:100%">دخول</button></form></div></body>
 """
     return render_template_string("<!doctype html><html lang='ar' dir='rtl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>دخول</title>" + STYLE + "</head>" + html + "</html>")
 
