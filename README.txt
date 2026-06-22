@@ -1,11 +1,12 @@
-RUFA GOLD ERP - نسخة مصححة ونظيفة
+RUFA GOLD ERP
 
-بيانات دخول المدير:
-ROFA
-1122334400
+بيانات المدير التنفيذي:
+اسم الدخول: ROFA
+كلمة المرور: QQ1122qq11223
 
-Render:
-Build Command: pip install -r requirements.txt
-Start Command: gunicorn app:app
+الصلاحيات:
+- مدير تنفيذي: المهام، إضافة/حذف الإعلانات، تعديل الصلاحيات، الحسابات.
+- مسوق عقاري: إضافة إعلان وتعديل إعلاناته فقط بدون حذف.
+- مسؤول ميداني: مشاهدة العقارات، إضافة وحذف الإعلانات، ومهامه الخاصة فقط.
 
-للحفظ الدائم أضف DATABASE_URL من PostgreSQL في Render Environment.
+للحفظ الدائم على Render أضف DATABASE_URL من PostgreSQL.

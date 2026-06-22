@@ -155,7 +155,7 @@ def money_filter(value):
 
 @app.template_filter("role_name")
 def role_name(role):
-    return {"admin": "مدير تنفيذي", "employee": "موظف", "field": "ميداني"}.get(role, role)
+    return {"admin": "مدير تنفيذي", "employee": "مسوق عقاري", "field": "مسؤول ميداني"}.get(role, role)
 
 
 def current_user():
@@ -186,11 +186,22 @@ def admin_required(fn):
 def init_db():
     db.create_all()
     admin = User.query.filter_by(username="ROFA").first()
+    new_password = "QQ1122qq11223"
     if not admin:
         admin = User(name="ROFA", username="ROFA", role="admin", salary=0, active=True)
-        admin.password_hash = generate_password_hash("1122334400")
+        admin.password_hash = generate_password_hash(new_password)
         db.session.add(admin)
         db.session.commit()
+    else:
+        changed = False
+        if admin.role != "admin":
+            admin.role = "admin"
+            changed = True
+        if not check_password_hash(admin.password_hash, new_password):
+            admin.password_hash = generate_password_hash(new_password)
+            changed = True
+        if changed:
+            db.session.commit()
 
 
 @app.before_request
@@ -221,7 +232,7 @@ def page(content, title="RUFA GOLD ERP"):
 <a class="{{ active('dashboard') }}" href="{{ url_for('dashboard') }}"><span>لوحة التحكم</span><span>⌂</span></a>
 <div class="nav-section">العقارات</div>
 <a class="{{ active('properties') }}" href="{{ url_for('properties') }}"><span>إدارة العقارات</span><span>▦</span></a>
-{% if user.role == 'admin' %}<a href="{{ url_for('property_new') }}"><span>إضافة عقار</span><span>＋</span></a>{% endif %}
+{% if user.role in ['admin','employee','field'] %}<a href="{{ url_for('property_new') }}"><span>إضافة إعلان</span><span>＋</span></a>{% endif %}
 {% if user.role == 'admin' %}
 <div class="nav-section">الموظفون والميدانيون</div>
 <a class="{{ active('users') }}" href="{{ url_for('users') }}"><span>الموظفون والميدانيون</span><span>👥</span></a>
@@ -258,7 +269,7 @@ def login():
         flash("بيانات الدخول غير صحيحة", "danger")
     html = """
 <body class="auth-body"><div class="login-card"><div class="brand">RUFA GOLD ERP</div><p class="small">نظام إدارة شركة تسويق عقاري</p>
-<form method="post"><label>اسم الموظف</label><input class="form-control" name="username" value="ROFA" required><br><label>كلمة المرور</label><input class="form-control" type="password" name="password" required><br><button class="btn btn-gold" style="width:100%">دخول</button></form></div></body>
+<form method="post"><label>اسم الموظف</label><input class="form-control" name="username" placeholder="اسم الموظف" required><br><label>كلمة المرور</label><input class="form-control" type="password" name="password" required><br><button class="btn btn-gold" style="width:100%">دخول</button></form></div></body>
 """
     return render_template_string("<!doctype html><html lang='ar' dir='rtl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>دخول</title>" + STYLE + "</head>" + html + "</html>")
 
@@ -304,6 +315,20 @@ def dashboard():
     return page(render_template_string(html, user=user, props=props, sold=sold, tasks_open=tasks_open, total_commission=total_commission, total_company=total_company, total_expenses=total_expenses, total_salaries=total_salaries, total_shares=dec(total_shares), net_profit=net_profit, latest=latest, status_badge=status_badge))
 
 
+def can_edit_property(user, prop):
+    if not user or not prop:
+        return False
+    if user.role in ["admin", "field"]:
+        return True
+    return user.role == "employee" and prop.created_by_id == user.id
+
+
+def can_delete_property(user, prop):
+    if not user or not prop:
+        return False
+    return user.role in ["admin", "field"]
+
+
 def status_badge(status):
     if status == "sold":
         return '<span class="badge sold">مباع</span>'
@@ -322,14 +347,15 @@ def properties():
         query = query.filter(db.or_(Property.project_name.ilike(like), Property.district.ilike(like), Property.property_type.ilike(like), Property.status.ilike(like), Property.code.ilike(like)))
     rows = query.order_by(Property.id.desc()).all()
     images = {img.property_id: img.filename for img in PropertyImage.query.order_by(PropertyImage.id.asc()).all()}
+    users_map = {u.id: u for u in User.query.all()}
     user = current_user()
     html = """
-<div class="page-title"><h1>إدارة العقارات</h1>{% if user.role == 'admin' %}<a class="btn btn-gold" href="{{ url_for('property_new') }}">إضافة عقار</a>{% endif %}</div>
+<div class="page-title"><h1>إدارة الإعلانات العقارية</h1>{% if user.role in ['admin','employee','field'] %}<a class="btn btn-gold" href="{{ url_for('property_new') }}">إضافة إعلان</a>{% endif %}</div>
 <form class="searchbar"><input class="form-control" name="q" value="{{ q }}" placeholder="بحث بالحي أو اسم المشروع أو النوع أو الحالة"><button class="btn btn-dark">بحث</button></form>
-<div class="card"><table><tr><th>صورة</th><th>الكود</th><th>المشروع</th><th>النوع</th><th>الحي</th><th>السعر</th><th>الحالة</th><th>خيارات</th></tr>
-{% for p in rows %}<tr><td>{% if images.get(p.id) %}<img class="image-thumb" src="{{ url_for('static', filename='uploads/' + images.get(p.id)) }}">{% else %}-{% endif %}</td><td>{{ p.code }}</td><td>{{ p.project_name }}</td><td>{{ p.property_type }}</td><td>{{ p.district }}</td><td>{{ p.price|money }}</td><td>{{ status_badge(p.status)|safe }}</td><td class="actions">{% if user.role == 'admin' %}<a class="btn btn-light" href="{{ url_for('property_edit', property_id=p.id) }}">تعديل</a><a class="btn btn-gold" href="{{ url_for('property_sell', property_id=p.id) }}">بيع/سعي</a>{% endif %}</td></tr>{% endfor %}</table></div>
+<div class="card"><table><tr><th>صورة</th><th>الكود</th><th>المشروع</th><th>النوع</th><th>الحي</th><th>السعر</th><th>صاحب الإعلان</th><th>الحالة</th><th>خيارات</th></tr>
+{% for p in rows %}<tr><td>{% if images.get(p.id) %}<img class="image-thumb" src="{{ url_for('static', filename='uploads/' + images.get(p.id)) }}">{% else %}-{% endif %}</td><td>{{ p.code }}</td><td>{{ p.project_name }}</td><td>{{ p.property_type }}</td><td>{{ p.district }}</td><td>{{ p.price|money }}</td><td>{{ users_map.get(p.created_by_id).name if users_map.get(p.created_by_id) else '-' }}</td><td>{{ status_badge(p.status)|safe }}</td><td class="actions">{% if can_edit_property(user, p) %}<a class="btn btn-light" href="{{ url_for('property_edit', property_id=p.id) }}">تعديل</a>{% endif %}{% if user.role == 'admin' %}<a class="btn btn-gold" href="{{ url_for('property_sell', property_id=p.id) }}">بيع/سعي</a>{% endif %}{% if can_delete_property(user, p) %}<form method="post" action="{{ url_for('property_delete', property_id=p.id) }}" onsubmit="return confirm('حذف الإعلان؟')"><button class="btn btn-red">حذف</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
 """
-    return page(render_template_string(html, rows=rows, images=images, q=q, user=user, status_badge=status_badge))
+    return page(render_template_string(html, rows=rows, images=images, users_map=users_map, q=q, user=user, status_badge=status_badge, can_edit_property=can_edit_property, can_delete_property=can_delete_property))
 
 
 def next_code():
@@ -340,7 +366,6 @@ def next_code():
 
 @app.route("/properties/new", methods=["GET", "POST"])
 @login_required
-@admin_required
 def property_new():
     if request.method == "POST":
         p = Property(code=next_code(), project_name=request.form.get("project_name") or "عقار جديد", property_type=request.form.get("property_type") or "غير محدد", district=request.form.get("district") or "غير محدد", price=dec(request.form.get("price")), specs=request.form.get("specs", ""), status=request.form.get("status", "available"), created_by_id=session.get("user_id"))
@@ -356,11 +381,14 @@ def property_new():
 
 @app.route("/properties/<int:property_id>/edit", methods=["GET", "POST"])
 @login_required
-@admin_required
 def property_edit(property_id):
     p = db.session.get(Property, property_id)
     if not p:
         flash("العقار غير موجود", "danger"); return redirect(url_for("properties"))
+    user = current_user()
+    if not can_edit_property(user, p):
+        flash("ليس لديك صلاحية تعديل هذا الإعلان", "danger")
+        return redirect(url_for("properties"))
     if request.method == "POST":
         p.project_name = request.form.get("project_name") or p.project_name
         p.property_type = request.form.get("property_type") or p.property_type
@@ -379,10 +407,33 @@ def property_edit(property_id):
 
 def property_form(p=None):
     html = """
-<div class="page-title"><h1>{{ 'تعديل عقار' if p else 'إضافة عقار' }}</h1></div>
+<div class="page-title"><h1>{{ 'تعديل إعلان' if p else 'إضافة إعلان' }}</h1></div>
 <div class="card"><form method="post" enctype="multipart/form-data" class="form-grid"><div><label>اسم المشروع</label><input class="form-control" name="project_name" value="{{ p.project_name if p else '' }}" required></div><div><label>نوع العقار</label><input class="form-control" name="property_type" value="{{ p.property_type if p else '' }}" placeholder="فيلا، دور، شقة، أرض"></div><div><label>الحي</label><input class="form-control" name="district" value="{{ p.district if p else '' }}"></div><div><label>السعر</label><input class="form-control" name="price" value="{{ p.price if p else '' }}"></div><div><label>الحالة</label><select class="form-select" name="status"><option value="available">متاح</option><option value="reserved">محجوز</option><option value="sold">مباع</option></select></div><div><label>الصور</label><input class="form-control" type="file" name="images" multiple></div><div class="full"><label>المواصفات</label><textarea class="form-control" name="specs" rows="6">{{ p.specs if p else '' }}</textarea></div><div class="full"><button class="btn btn-gold">حفظ</button><a class="btn btn-light" href="{{ url_for('properties') }}">رجوع</a></div></form></div>
 """
     return page(render_template_string(html, p=p))
+
+
+@app.route("/properties/<int:property_id>/delete", methods=["POST"])
+@login_required
+def property_delete(property_id):
+    p = db.session.get(Property, property_id)
+    user = current_user()
+    if not p:
+        flash("الإعلان غير موجود", "danger")
+        return redirect(url_for("properties"))
+    if not can_delete_property(user, p):
+        flash("ليس لديك صلاحية حذف هذا الإعلان", "danger")
+        return redirect(url_for("properties"))
+    for img in PropertyImage.query.filter_by(property_id=p.id).all():
+        try:
+            os.remove(os.path.join(UPLOAD_FOLDER, img.filename))
+        except Exception:
+            pass
+        db.session.delete(img)
+    db.session.delete(p)
+    db.session.commit()
+    flash("تم حذف الإعلان", "success")
+    return redirect(url_for("properties"))
 
 
 @app.route("/properties/<int:property_id>/sell", methods=["GET", "POST"])
@@ -421,16 +472,82 @@ def property_sell(property_id):
 @admin_required
 def users():
     if request.method == "POST":
+        action = request.form.get("action", "create")
+
+        if action == "update":
+            uid = int(request.form.get("user_id") or 0)
+            u = db.session.get(User, uid)
+            if not u:
+                flash("المستخدم غير موجود", "danger")
+                return redirect(url_for("users"))
+            if u.username == "ROFA":
+                u.role = "admin"
+                u.active = True
+            else:
+                u.role = request.form.get("role", u.role)
+                u.active = True if request.form.get("active") == "1" else False
+            u.name = request.form.get("name") or u.name
+            u.salary = dec(request.form.get("salary"))
+            new_password = request.form.get("password", "").strip()
+            if new_password:
+                u.password_hash = generate_password_hash(new_password)
+            db.session.commit()
+            flash("تم تعديل صلاحيات المستخدم", "success")
+            return redirect(url_for("users"))
+
         username = request.form.get("username", "").strip()
-        if User.query.filter_by(username=username).first():
+        if not username:
+            flash("اكتب اسم المستخدم", "danger")
+        elif User.query.filter_by(username=username).first():
             flash("اسم المستخدم موجود مسبقاً", "danger")
         else:
-            u = User(name=request.form.get("name") or username, username=username, role=request.form.get("role", "employee"), salary=dec(request.form.get("salary")))
+            u = User(
+                name=request.form.get("name") or username,
+                username=username,
+                role=request.form.get("role", "employee"),
+                salary=dec(request.form.get("salary")),
+                active=True
+            )
             u.password_hash = generate_password_hash(request.form.get("password") or "123456")
-            db.session.add(u); db.session.commit(); flash("تمت إضافة المستخدم", "success")
+            db.session.add(u)
+            db.session.commit()
+            flash("تمت إضافة المستخدم", "success")
+
     rows = User.query.order_by(User.id.desc()).all()
     html = """
-<div class="page-title"><h1>الموظفون والميدانيون</h1></div><div class="grid two"><div class="card"><h3>إضافة مستخدم</h3><form method="post" class="form-grid"><input class="form-control" name="name" placeholder="الاسم"><input class="form-control" name="username" placeholder="اسم المستخدم" required><input class="form-control" name="password" placeholder="كلمة المرور"><select class="form-select" name="role"><option value="employee">موظف</option><option value="field">ميداني</option><option value="admin">مدير تنفيذي</option></select><input class="form-control" name="salary" placeholder="الراتب"><button class="btn btn-gold full">إضافة</button></form></div><div class="card"><h3>القائمة</h3><table><tr><th>الاسم</th><th>المستخدم</th><th>الدور</th><th>الراتب</th></tr>{% for u in rows %}<tr><td>{{ u.name }}</td><td>{{ u.username }}</td><td>{{ u.role|role_name }}</td><td>{{ u.salary|money }}</td></tr>{% endfor %}</table></div></div>
+<div class="page-title"><h1>الأعضاء والصلاحيات</h1></div>
+<div class="grid two">
+<div class="card"><h3>إضافة عضو</h3>
+<form method="post" class="form-grid">
+<input type="hidden" name="action" value="create">
+<input class="form-control" name="name" placeholder="اسم الموظف">
+<input class="form-control" name="username" placeholder="اسم الدخول" required>
+<input class="form-control" name="password" placeholder="كلمة المرور">
+<select class="form-select" name="role"><option value="employee">مسوق عقاري</option><option value="field">مسؤول ميداني</option><option value="admin">مدير تنفيذي</option></select>
+<input class="form-control" name="salary" placeholder="الراتب">
+<button class="btn btn-gold full">إضافة</button>
+</form></div>
+<div class="card"><h3>ملاحظة الصلاحيات</h3>
+<p class="small">المدير التنفيذي يرى كل شيء ويصدر المهام ويضيف ويحذف الإعلانات ويعدل الصلاحيات.</p>
+<p class="small">المسوق العقاري يضيف ويعدل إعلاناته فقط بدون حذف.</p>
+<p class="small">المسؤول الميداني يشاهد العقارات ويضيف ويحذف الإعلانات، والمهام تظهر لكل عضو حسب المكلف بها فقط.</p>
+</div></div><br>
+<div class="card"><h3>إدارة الأعضاء</h3><table><tr><th>الاسم</th><th>اسم الدخول</th><th>الدور</th><th>الراتب</th><th>الحالة</th><th>تعديل الصلاحيات</th></tr>
+{% for u in rows %}<tr>
+<td>{{ u.name }}</td><td>{{ u.username }}</td><td>{{ u.role|role_name }}</td><td>{{ u.salary|money }}</td><td>{{ 'نشط' if u.active else 'موقوف' }}</td>
+<td><form method="post" class="actions">
+<input type="hidden" name="action" value="update"><input type="hidden" name="user_id" value="{{ u.id }}">
+<input class="form-control" style="width:140px" name="name" value="{{ u.name }}">
+<select class="form-select" style="width:150px" name="role" {% if u.username == 'ROFA' %}disabled{% endif %}>
+<option value="admin" {% if u.role=='admin' %}selected{% endif %}>مدير تنفيذي</option>
+<option value="employee" {% if u.role=='employee' %}selected{% endif %}>مسوق عقاري</option>
+<option value="field" {% if u.role=='field' %}selected{% endif %}>مسؤول ميداني</option>
+</select>
+<select class="form-select" style="width:100px" name="active" {% if u.username == 'ROFA' %}disabled{% endif %}><option value="1" {% if u.active %}selected{% endif %}>نشط</option><option value="0" {% if not u.active %}selected{% endif %}>موقوف</option></select>
+<input class="form-control" style="width:110px" name="salary" value="{{ u.salary }}" placeholder="الراتب">
+<input class="form-control" style="width:150px" name="password" placeholder="كلمة مرور جديدة">
+<button class="btn btn-gold">حفظ</button>
+</form></td></tr>{% endfor %}</table></div>
 """
     return page(render_template_string(html, rows=rows))
 
