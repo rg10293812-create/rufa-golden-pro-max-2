@@ -439,9 +439,19 @@ def users():
 @login_required
 def tasks():
     user = current_user()
-    if request.method == "POST" and user.role == "admin":
+    if request.method == "POST" and request.form.get("delete_task") and user.role == "admin":
+        t = db.session.get(Task, int(request.form.get("delete_task")))
+        if t and t.status == "done":
+            db.session.delete(t)
+            db.session.commit()
+            flash("تم حذف المهمة المنفذة", "success")
+        else:
+            flash("لا يمكن حذف المهمة إلا بعد تنفيذها", "danger")
+        return redirect(url_for("tasks"))
+    if request.method == "POST" and user.role == "admin" and request.form.get("title"):
         t = Task(title=request.form.get("title") or "مهمة", details=request.form.get("details", ""), assigned_to_id=int(request.form.get("assigned_to_id")), created_by_id=user.id)
         db.session.add(t); db.session.commit(); flash("تم إرسال المهمة", "success")
+        return redirect(url_for("tasks"))
     if request.method == "POST" and request.form.get("complete_task"):
         t = db.session.get(Task, int(request.form.get("complete_task")))
         if t and (user.role == "admin" or t.assigned_to_id == user.id):
@@ -453,7 +463,7 @@ def tasks():
     rows = Task.query.order_by(Task.id.desc()).all() if user.role == "admin" else Task.query.filter_by(assigned_to_id=user.id).order_by(Task.id.desc()).all()
     users_map = {u.id: u for u in User.query.all()}
     html = """
-<div class="page-title"><h1>{{ 'المهام' if user.role == 'admin' else 'مهامي' }}</h1></div>{% if user.role == 'admin' %}<div class="card"><h3>إنشاء مهمة</h3><form method="post" class="form-grid"><input class="form-control" name="title" placeholder="عنوان المهمة" required><select class="form-select" name="assigned_to_id">{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select><textarea class="form-control full" name="details" placeholder="التفاصيل"></textarea><button class="btn btn-gold full">إرسال</button></form></div><br>{% endif %}<div class="card"><table><tr><th>المهمة</th><th>المكلف</th><th>الحالة</th><th>تنفيذ</th></tr>{% for t in rows %}<tr><td><b>{{ t.title }}</b><div class="small">{{ t.details }}</div>{% if t.note %}<div class="small">ملاحظة: {{ t.note }}</div>{% endif %}</td><td>{{ users_map.get(t.assigned_to_id).name if users_map.get(t.assigned_to_id) else '-' }}</td><td>{{ 'تم' if t.status == 'done' else 'مفتوحة' }}</td><td>{% if t.status != 'done' %}<form method="post" enctype="multipart/form-data"><input type="hidden" name="complete_task" value="{{ t.id }}"><input class="form-control" name="note" placeholder="ملاحظة"><input class="form-control" type="file" name="attachment"><button class="btn btn-gold">تم التنفيذ</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
+<div class="page-title"><h1>{{ 'المهام' if user.role == 'admin' else 'مهامي' }}</h1></div>{% if user.role == 'admin' %}<div class="card"><h3>إنشاء مهمة</h3><form method="post" class="form-grid"><input class="form-control" name="title" placeholder="عنوان المهمة" required><select class="form-select" name="assigned_to_id">{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select><textarea class="form-control full" name="details" placeholder="التفاصيل"></textarea><button class="btn btn-gold full">إرسال</button></form></div><br>{% endif %}<div class="card"><table><tr><th>المهمة</th><th>المكلف</th><th>الحالة</th><th>الإجراءات</th></tr>{% for t in rows %}<tr><td><b>{{ t.title }}</b><div class="small">{{ t.details }}</div>{% if t.note %}<div class="small">ملاحظة: {{ t.note }}</div>{% endif %}</td><td>{{ users_map.get(t.assigned_to_id).name if users_map.get(t.assigned_to_id) else '-' }}</td><td>{{ 'تم' if t.status == 'done' else 'مفتوحة' }}</td><td>{% if t.status != 'done' %}<form method="post" enctype="multipart/form-data"><input type="hidden" name="complete_task" value="{{ t.id }}"><input class="form-control" name="note" placeholder="ملاحظة"><input class="form-control" type="file" name="attachment"><button class="btn btn-gold">تم التنفيذ</button></form>{% elif user.role == 'admin' %}<form method="post" onsubmit="return confirm('حذف المهمة المنفذة؟')"><input type="hidden" name="delete_task" value="{{ t.id }}"><button class="btn btn-red">حذف المهمة</button></form>{% else %}<span class="badge ok">منفذة</span>{% endif %}</td></tr>{% endfor %}</table></div>
 """
     return page(render_template_string(html, user=user, staff=staff, rows=rows, users_map=users_map))
 
@@ -471,20 +481,41 @@ def finance():
 
         if action == "share":
             deal_id = int(request.form.get("deal_id") or 0)
-            user_id = int(request.form.get("user_id") or 0)
-            amount = dec(request.form.get("amount"))
             deal = db.session.get(Deal, deal_id)
-            participant = db.session.get(User, user_id)
-            if not deal or not participant or amount <= 0:
-                flash("تأكد من اختيار الصفقة والموظف وكتابة مبلغ صحيح", "danger")
+            user_ids = request.form.getlist("user_id")
+            amounts = request.form.getlist("amount")
+            if not deal:
+                flash("اختر الصفقة بشكل صحيح", "danger")
                 return redirect(url_for("finance"))
-            if amount > available_now:
-                flash("مبلغ مشاركة السعي أكبر من المتبقي من إجمالي السعي", "danger")
+
+            prepared = []
+            total_new_shares = Decimal("0")
+            used_users = set()
+            for uid_raw, amount_raw in zip(user_ids, amounts):
+                if not uid_raw or not amount_raw:
+                    continue
+                participant = db.session.get(User, int(uid_raw))
+                amount = dec(amount_raw)
+                if not participant or amount <= 0:
+                    continue
+                if participant.id in used_users:
+                    flash("لا تكرر نفس الموظف في نفس عملية المشاركة", "danger")
+                    return redirect(url_for("finance"))
+                used_users.add(participant.id)
+                prepared.append((participant, amount))
+                total_new_shares += amount
+
+            if not prepared:
+                flash("أضف موظفاً واحداً على الأقل مع مبلغ صحيح", "danger")
                 return redirect(url_for("finance"))
-            share = DealShare(deal_id=deal.id, user_id=participant.id, amount=amount, percent=0)
-            db.session.add(share)
+            if total_new_shares > available_now:
+                flash("مجموع مشاركات السعي أكبر من المتبقي من إجمالي السعي", "danger")
+                return redirect(url_for("finance"))
+
+            for participant, amount in prepared:
+                db.session.add(DealShare(deal_id=deal.id, user_id=participant.id, amount=amount, percent=0))
             db.session.commit()
-            flash("تم حفظ مشاركة السعي للموظف", "success")
+            flash("تم حفظ مشاركات السعي للموظفين", "success")
             return redirect(url_for("finance"))
 
         title = request.form.get("title") or "بند مالي"
@@ -528,13 +559,15 @@ def finance():
 </div><br>
 <div class="grid two">
 <div class="card"><h3>زر مشاركة سعي</h3>
-<p class="small">اختر الصفقة ثم الموظف أو الميداني المشارك في البيع، واكتب المبلغ بنفسك من إجمالي السعي. لا يوجد تقسيم تلقائي.</p>
+<p class="small">اختر الصفقة ثم أضف أكثر من موظف أو ميداني مشارك، واكتب مبلغ كل شخص بنفسك من إجمالي السعي. لا يوجد تقسيم تلقائي.</p>
 <form method="post" class="form-grid">
 <input type="hidden" name="action" value="share">
-<div><label>الصفقة</label><select class="form-select" name="deal_id" required>{% for d in deals %}<option value="{{ d.id }}">#{{ d.id }} - {{ props_map.get(d.property_id).project_name if props_map.get(d.property_id) else 'عقار' }} - {{ d.commission_amount|money }}</option>{% endfor %}</select></div>
-<div><label>الموظف أو الميداني</label><select class="form-select" name="user_id" required>{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select></div>
-<div class="full"><label>مبلغ المشاركة من السعي</label><input class="form-control" name="amount" placeholder="مثال: 5000" required></div>
-<button class="btn btn-gold full">حفظ مشاركة السعي</button></form></div>
+<div class="full"><label>الصفقة</label><select class="form-select" name="deal_id" required>{% for d in deals %}<option value="{{ d.id }}">#{{ d.id }} - {{ props_map.get(d.property_id).project_name if props_map.get(d.property_id) else 'عقار' }} - {{ d.commission_amount|money }}</option>{% endfor %}</select></div>
+{% for i in range(1,6) %}
+<div><label>الموظف أو الميداني {{ i }}</label><select class="form-select" name="user_id"><option value="">بدون</option>{% for u in staff %}<option value="{{ u.id }}">{{ u.name }} - {{ u.role|role_name }}</option>{% endfor %}</select></div>
+<div><label>مبلغ المشاركة {{ i }}</label><input class="form-control" name="amount" placeholder="مثال: 5000"></div>
+{% endfor %}
+<button class="btn btn-gold full">حفظ مشاركات السعي</button></form></div>
 <div class="card"><h3>إضافة صرف من إجمالي السعي</h3>
 <p class="small">هنا تضيف رواتب الموظفين أو الإعلانات أو التصوير أو أي مصروف، وكلها تخصم من المتبقي من إجمالي السعي.</p>
 <form method="post" class="form-grid">
