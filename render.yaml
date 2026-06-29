@@ -1,8 +1,3 @@
-databases:
-  - name: rufa-gold-db
-    databaseName: rufa_gold
-    user: rufa_gold
-
 services:
   - type: web
     name: rufa-gold-erp
@@ -12,7 +7,3 @@ services:
     envVars:
       - key: SECRET_KEY
         generateValue: true
-      - key: DATABASE_URL
-        fromDatabase:
-          name: rufa-gold-db
-          property: connectionString
